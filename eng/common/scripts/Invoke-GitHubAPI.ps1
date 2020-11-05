@@ -1,6 +1,4 @@
-if (!(Test-Path Function:LogWarning)) {
-  . "${PSScriptRoot}\logging.ps1"
-}
+. "${PSScriptRoot}\logging.ps1"
 
 $GithubAPIBaseURI = "https://api.github.com/repos"
 

@@ -14,94 +14,101 @@ param (
   [Parameter(Mandatory = $true)]
   [String]$PackageName,
   [boolean]$Unreleased=$True,
-  [boolean]$ReplaceVersion = $False
+  [boolean]$ReplaceVersion = $False,
+  [String]$ReleaseDate
 )
 
-DynamicParam {
-    if ($Unreleased -eq $False) {
-        $releaseStatusAttribute = New-Object System.Management.Automation.ParameterAttribute
-        $releaseStatusAttribute.Mandatory = $False
-        $attributeCollection = New-object System.Collections.ObjectModel.Collection[System.Attribute]
-        $attributeCollection.Add($releaseStatusAttribute)
-        $releaseStatusParam = New-Object System.Management.Automation.RuntimeDefinedParameter('ReleaseDate', [string], $attributeCollection)
-        $paramDictionary = New-Object System.Management.Automation.RuntimeDefinedParameterDictionary
-        $paramDictionary.Add('ReleaseDate', $releaseStatusParam)
-        return $paramDictionary
-    }
+if ($ReleaseDate -and ($Unreleased -eq $True)) {
+    LogError "Do not pass 'ReleaseDate' arguement when 'Unreleased' is true"
+    exit 1
 }
 
-Begin {
-    . "${PSScriptRoot}\common.ps1"
-    $UNRELEASED_TAG = "(Unreleased)"
+. "${PSScriptRoot}\common.ps1"
 
-    $dateFormat = "yyyy-MM-dd"
-    $provider = [System.Globalization.CultureInfo]::InvariantCulture
-    if ($ReleaseDate)
-    {
-        try {
-            $ReleaseStatus = "({0})" -f ([System.DateTime]::ParseExact($ReleaseDate, $dateFormat, $provider)).ToString($dateFormat)
-        }
-        catch {
-            LogError "Invalid Release date. Please use a valid date in the format '$dateFormat'"
-        }
+if ($ReleaseDate)
+{
+    try {
+        $ReleaseStatus = ([DateTime]$ReleaseDate).ToString($CHANGELOG_DATE_FORMAT)
+        $ReleaseStatus = "($ReleaseStatus)"
     }
-    elseif ($Unreleased) {
-        $ReleaseStatus = "$UNRELEASED_TAG"
-    }
-    else {
-        $ReleaseStatus = "($(Get-Date -Format $dateFormat))"
+    catch {
+        LogError "Invalid 'ReleaseDate'. Please use a valid date in the format '$CHANGELOG_DATE_FORMAT'"
+        exit 1
     }
 }
+elseif ($Unreleased) {
+    $ReleaseStatus = $CHANGELOG_UNRELEASED_STATUS
+}
+else {
+    $ReleaseStatus = "$(Get-Date -Format $CHANGELOG_DATE_FORMAT)"
+    $ReleaseStatus = "($ReleaseStatus)"
+}
 
-Process {
-    $PkgProperties = Get-PkgProperties -PackageName $PackageName -ServiceDirectory $ServiceDirectory
-    $ChangeLogEntries = Get-ChangeLogEntries -ChangeLogLocation $PkgProperties.ChangeLogPath
+$PkgProperties = Get-PkgProperties -PackageName $PackageName -ServiceDirectory $ServiceDirectory
+$ChangeLogEntries = Get-ChangeLogEntries -ChangeLogLocation $PkgProperties.ChangeLogPath
 
-    if ($ChangeLogEntries.Count -gt 0)
+if ($ChangeLogEntries.Count -gt 0)
+{
+    if ($ChangeLogEntries.Contains($Version))
     {
-        if ($ChangeLogEntries.Contains($Version))
+        if ($ChangeLogEntries[$Version].ReleaseStatus -eq $ReleaseStatus)
         {
-            if ($ChangeLogEntries[$Version].ReleaseStatus -eq $ReleaseStatus)
-            {
-                LogWarning "Version is already present in change log with specificed ReleaseStatus [$ReleaseStatus]"
-                exit(0)
-            }
-
-            if ($Unreleased -and ($ChangeLogEntries[$Version].ReleaseStatus -ne $ReleaseStatus))
-            {
-                LogWarning "Version is already present in change log with a release date. Please review [$($PkgProperties.ChangeLogPath)]"
-                exit(0)
-            }
-
-            if (!$Unreleased -and ($ChangeLogEntries[$Version].ReleaseStatus -ne $UNRELEASED_TAG))
-            {
-                if ((Get-Date ($ChangeLogEntries[$Version].ReleaseStatus).Trim("()")) -gt (Get-Date $ReleaseStatus.Trim("()")))
-                {
-                    LogWarning "New ReleaseDate is older than existing release date in changelog. Please review [$($PkgProperties.ChangeLogPath)]"
-                    exit(0)
-                }
-            }
+            LogWarning "Version is already present in change log with specificed ReleaseStatus [$ReleaseStatus]"
+            exit(0)
         }
 
-        $PresentVersionsSorted = [AzureEngSemanticVersion]::SortVersionStrings($ChangeLogEntries.Keys)
-        $LatestVersion = $PresentVersionsSorted[0]
-
-        if ($ReplaceVersion) 
+        if ($Unreleased -and ($ChangeLogEntries[$Version].ReleaseStatus -ne $ReleaseStatus))
         {
-            $ChangeLogEntries.Remove($LatestVersion)
-            $ChangeLogEntries[$Version] = New-ChangeLogEntry -Version $Version -Status $ReleaseStatus
+            LogWarning "Version is already present in change log with a release date. Please review [$($PkgProperties.ChangeLogPath)]"
+            exit(0)
         }
-        else 
+
+        if (!$Unreleased -and ($ChangeLogEntries[$Version].ReleaseStatus -ne $CHANGELOG_UNRELEASED_STATUS))
         {
-            $ChangeLogEntries[$Version] = New-ChangeLogEntry -Version $Version -Status $ReleaseStatus
+            if (Get-Date ($ChangeLogEntries[$Version].ReleaseStatus).Trim("()") -gt Get-Date $ReleaseStatus.Trim("()"))
+            {
+                LogWarning "New ReleaseDate is older than existing release date in changelog. Please review [$($PkgProperties.ChangeLogPath)]"
+                exit(0)
+            }
+        }
+    }
+
+    $PresentVersionsSorted = [AzureEngSemanticVersion]::SortVersionStrings($ChangeLogEntries.Keys)
+    $LatestVersion = $PresentVersionsSorted[0]
+
+    if ($ReplaceVersion) 
+    {
+        $ChangeLogEntries.Remove($LatestVersion)
+        $newChangeLogEntry = New-ChangeLogEntry -Version $Version -Status $ReleaseStatus
+        if ($newChangeLogEntry) {
+            $ChangeLogEntries[$Version] = $newChangeLogEntry
+        }
+        else {
+            LogError "Failed to create new changelog entry"
         }
     }
     else 
     {
-        $ChangeLogEntries[$Version] = New-ChangeLogEntry -Version $Version -Status $ReleaseStatus
+        $newChangeLogEntry = New-ChangeLogEntry -Version $Version -Status $ReleaseStatus
+        if ($newChangeLogEntry) {
+            $ChangeLogEntries[$Version] = $newChangeLogEntry
+        }
+        else {
+            LogError "Failed to create new changelog entry"
+        }
     }
-
-    Set-ChangeLogContent -ChangeLogLocation $PkgProperties.ChangeLogPath -ChangeLogEntries $ChangeLogEntries
 }
+else 
+{
+    $newChangeLogEntry = New-ChangeLogEntry -Version $Version -Status $ReleaseStatus
+    if ($newChangeLogEntry) {
+        $ChangeLogEntries[$Version] = $newChangeLogEntry
+    }
+    else {
+        LogError "Failed to create new changelog entry"
+    }
+}
+
+Set-ChangeLogContent -ChangeLogLocation $PkgProperties.ChangeLogPath -ChangeLogEntries $ChangeLogEntries
 
 
