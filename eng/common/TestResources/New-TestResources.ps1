@@ -59,7 +59,13 @@ param (
     [string] $Environment = 'AzureCloud',
 
     [Parameter()]
+    [hashtable] $ArmTemplateParameters,
+
+    [Parameter()]
     [hashtable] $AdditionalParameters,
+
+    [Parameter()]
+    [hashtable] $EnvironmentVariables,
 
     [Parameter()]
     [switch] $CI = ($null -ne $env:SYSTEM_TEAMPROJECTID),
@@ -118,7 +124,7 @@ $repositoryRoot = "$PSScriptRoot/../../.." | Resolve-Path
 $root = [System.IO.Path]::Combine($repositoryRoot, "sdk", $ServiceDirectory) | Resolve-Path
 $templateFileName = 'test-resources.json'
 $templateFiles = @()
-$environmentVariables = @{}
+$outputEnvironmentVariables = @{}
 # Azure SDK Developer Playground
 $defaultSubscription = "faa080af-c1d8-40ad-9cce-e1a450ca5b57"
 
@@ -289,7 +295,7 @@ if ($CI) {
     # Set the resource group name variable.
     Write-Host "Setting variable 'AZURE_RESOURCEGROUP_NAME': $ResourceGroupName"
     Write-Host "##vso[task.setvariable variable=AZURE_RESOURCEGROUP_NAME;]$ResourceGroupName"
-    $environmentVariables['AZURE_RESOURCEGROUP_NAME'] = $ResourceGroupName
+    $outputEnvironmentVariables['AZURE_RESOURCEGROUP_NAME'] = $ResourceGroupName
 }
 
 Log "Creating resource group '$ResourceGroupName' in location '$Location'"
@@ -322,11 +328,14 @@ if ($TenantId) {
 if ($TestApplicationSecret) {
     $templateParameters.Add('testApplicationSecret', $TestApplicationSecret)
 }
-if ($AdditionalParameters) {
-    $templateParameters += $AdditionalParameters
+if ($ArmTemplateParameters) {
+    $templateParameters += $ArmTemplateParameters
+}
+foreach ($key in $AdditionalParameters.Keys) {
+  $templateParameters[$key] = $AdditionalParameters[$key]
 }
 
-# Include environment-specific parameters only if not already provided as part of the "AdditionalParameters"
+# Include environment-specific parameters only if not already provided as part of the "ArmTemplateParameters"
 if (($context.Environment.StorageEndpointSuffix) -and (-not ($templateParameters.ContainsKey('storageEndpointSuffix')))) {
     $templateParameters.Add('storageEndpointSuffix', $context.Environment.StorageEndpointSuffix)
 }
@@ -388,6 +397,10 @@ foreach ($templateFile in $templateFiles) {
         "$($serviceDirectoryPrefix)STORAGE_ENDPOINT_SUFFIX" = $context.Environment.StorageEndpointSuffix;
     }
 
+    foreach ($key in $EnvironmentVariables.Keys) {
+        $deploymentOutputs.Add($key, $EnvironmentVariables[$key])
+    }
+
     foreach ($key in $deployment.Outputs.Keys) {
         $variable = $deployment.Outputs[$key]
 
@@ -422,7 +435,7 @@ foreach ($templateFile in $templateFiles) {
 
         foreach ($key in $deploymentOutputs.Keys) {
             $value = $deploymentOutputs[$key]
-            $environmentVariables[$key] = $value
+            $outputEnvironmentVariables[$key] = $value
 
             if ($CI) {
                 # Treat all ARM template output variables as secrets since "SecureString" variables do not set values.
@@ -453,7 +466,7 @@ $exitActions.Invoke()
 
 # Suppress output locally
 if ($CI) {
-    return $environmentVariables
+    return $outputEnvironmentVariables
 }
 
 <#
@@ -571,7 +584,13 @@ Name of the cloud environment. The default is the Azure Public Cloud
 ('AzureCloud')
 
 .PARAMETER AdditionalParameters
+Optional key-value pairs of parameters to pass to the ARM template(s) and pre-post scripts.
+
+.PARAMETER ArmTemplateParameters
 Optional key-value pairs of parameters to pass to the ARM template(s).
+
+.PARAMETER EnvironmentVariables
+Optional key-value pairs of parameters to set as environment variables to the shell.
 
 .PARAMETER CI
 Indicates the script is run as part of a Continuous Integration / Continuous
