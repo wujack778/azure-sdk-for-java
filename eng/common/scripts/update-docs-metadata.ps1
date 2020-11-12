@@ -93,8 +93,7 @@ function GetAdjustedReadmeContent($pkgInfo, $lang){
 }
 
 $apiUrl = "https://api.github.com/repos/$repoId"
-$pkgs = VerifyPackages -pkgRepository $Repository `
-  -artifactLocation $ArtifactLocation `
+$pkgs = VerifyPackages -artifactLocation $ArtifactLocation `
   -workingDirectory $WorkDirectory `
   -apiUrl $apiUrl `
   -releaseSha $ReleaseSHA `

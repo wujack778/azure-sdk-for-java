@@ -1,5 +1,4 @@
-Import-Module "${PSScriptRoot}/modules/ChangeLog-Operations.psm1"
-. (Join-Path $PSScriptRoot SemVer.ps1)
+. (Join-Path $PSScriptRoot common.ps1)
 
 $SDIST_PACKAGE_REGEX = "^(?<package>.*)\-(?<versionstring>$([AzureEngSemanticVersion]::SEMVER_REGEX))"
 
@@ -117,66 +116,6 @@ function ResolvePkgJson($workFolder) {
   }
 
   return ($pathsWithComplexity | Sort-Object -Property Complexity)[0].Path
-}
-
-# Parse out package publishing information given a .tgz npm artifact
-function ParseNPMPackage($pkg, $workingDirectory) {
-  $workFolder = "$workingDirectory$($pkg.Basename)"
-  $origFolder = Get-Location
-  $releaseNotes = ""
-  $readmeContent = ""
-
-  New-Item -ItemType Directory -Force -Path $workFolder
-  cd $workFolder
-
-  tar -xzf $pkg
-
-  $packageJSON = ResolvePkgJson -workFolder $workFolder | Get-Content | ConvertFrom-Json
-  $pkgId = $packageJSON.name
-  $pkgVersion = $packageJSON.version
-
-  $changeLogLoc = @(Get-ChildItem -Path $workFolder -Recurse -Include "CHANGELOG.md")[0]
-  if ($changeLogLoc) {
-    $releaseNotes = Get-ChangeLogEntryAsString -ChangeLogLocation $changeLogLoc -VersionString $pkgVersion
-  }
-
-  $readmeContentLoc = @(Get-ChildItem -Path $workFolder -Recurse -Include "README.md") | Select-Object -Last 1
-  if ($readmeContentLoc) {
-    $readmeContent = Get-Content -Raw $readmeContentLoc
-  }
-
-  cd $origFolder
-  Remove-Item $workFolder -Force  -Recurse -ErrorAction SilentlyContinue
-
-  $resultObj = New-Object PSObject -Property @{
-    PackageId      = $pkgId
-    PackageVersion = $pkgVersion
-    ReleaseTag     = "$($pkgId)_$($pkgVersion)"
-    Deployable     = $forceCreate -or !(IsNPMPackageVersionPublished -pkgId $pkgId -pkgVersion $pkgVersion)
-    ReleaseNotes   = $releaseNotes
-    ReadmeContent  = $readmeContent
-  }
-
-  return $resultObj
-}
-
-# Returns the npm publish status of a package id and version.
-function IsNPMPackageVersionPublished($pkgId, $pkgVersion) {
-  $npmVersions = (npm show $pkgId versions)
-
-  if ($LastExitCode -ne 0) {
-    npm ping
-
-    if ($LastExitCode -eq 0) {
-      return $False
-    }
-
-    Write-Host "Could not find a deployed version of $pkgId, and NPM connectivity check failed."
-    exit(1)
-  }
-
-  $npmVersionList = $npmVersions.split(",") | % { return $_.replace("[", "").replace("]", "").Trim() }
-  return $npmVersionList.Contains($pkgVersion)
 }
 
 # Parse out package publishing information given a nupkg ZIP format.
@@ -399,7 +338,7 @@ function RetrieveReleaseTag($pkgRepository, $artifactLocation, $continueOnError 
     return ""
   }
   try {
-    $pkgs, $parsePkgInfoFn = RetrievePackages -pkgRepository $pkgRepository -artifactLocation $artifactLocation
+    $pkgs, $parsePkgInfoFn = RetrievePackages -artifactLocation $artifactLocation
     if (!$pkgs -or !$pkgs[0]) {
       Write-Host "No packages retrieved from artifact location."
       return ""
@@ -421,52 +360,15 @@ function RetrieveReleaseTag($pkgRepository, $artifactLocation, $continueOnError 
     Write-Error "No release tag retrieved from $artifactLocation"
   }
 }
-function RetrievePackages($pkgRepository, $artifactLocation) {
-  $parsePkgInfoFn = ""
-  $packagePattern = ""
-  $pkgRepository = $pkgRepository.Trim()
-  switch ($pkgRepository) {
-    "Maven" {
-      $parsePkgInfoFn = "ParseMavenPackage"
-      $packagePattern = "*.pom"
-      break
-    }
-    "Nuget" {
-      $parsePkgInfoFn = "ParseNugetPackage"
-      $packagePattern = "*.nupkg"
-      break
-    }
-    "NPM" {
-      $parsePkgInfoFn = "ParseNPMPackage"
-      $packagePattern = "*.tgz"
-      break
-    }
-    "PyPI" {
-      $parsePkgInfoFn = "ParsePyPIPackage"
-      $packagePattern = "*.zip"
-      break
-    }
-    "C" {
-      $parsePkgInfoFn = "ParseCArtifact"
-      $packagePattern = "*.json"
-    }
-    "CPP" {
-      $parsePkgInfoFn = "ParseCppArtifact"
-      $packagePattern = "*.json"
-    }
-    default {
-      Write-Host "Unrecognized Language: $language"
-      exit(1)
-    }
-  }
+function RetrievePackages($artifactLocation) {
   $pkgs = Get-ChildItem -Path $artifactLocation -Include $packagePattern -Recurse -File
-  return $pkgs, $parsePkgInfoFn
+  return $pkgs, $GetPackageInfoFromPackageFileFn
 }
 
 # Walk across all build artifacts, check them against the appropriate repository, return a list of tags/releases
-function VerifyPackages($pkgRepository, $artifactLocation, $workingDirectory, $apiUrl, $releaseSha,  $continueOnError = $false) {
+function VerifyPackages($artifactLocation, $workingDirectory, $apiUrl, $releaseSha,  $continueOnError = $false) {
   $pkgList = [array]@()
-  $pkgs, $parsePkgInfoFn = RetrievePackages -pkgRepository $pkgRepository -artifactLocation $artifactLocation
+  $pkgs, $parsePkgInfoFn = RetrievePackages -artifactLocation $artifactLocation
 
   foreach ($pkg in $pkgs) {
     try {
